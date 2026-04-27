@@ -11,7 +11,7 @@ description: >
 
 # EPUB Bilingual Translator
 
-This skill translates an EPUB ebook paragraph by paragraph into Chinese, then produces a bilingual EPUB where each original paragraph is immediately followed by its Chinese translation. The original EPUB formatting — cover, styles, images, fonts, layout — is fully preserved; only the translation paragraphs are inserted.
+This skill translates an EPUB ebook paragraph by paragraph into Chinese, then produces a bilingual EPUB where each original paragraph is immediately followed by its Chinese translation. The original EPUB formatting — cover, styles, images, fonts, layout — is fully preserved; only the translation paragraphs are inserted. If the source EPUB uses vertical writing mode (e.g., Japanese 縦書き books), the builder automatically overrides it to horizontal writing mode (横書き) to match Chinese reading habits.
 
 ## How It Works
 
@@ -58,6 +58,7 @@ This is the core work. For each content chapter, translate every paragraph from 
 
 - Translate paragraph by paragraph, preserving the paragraph index so translations can be matched back to originals.
 - Aim for natural, readable Chinese rather than word-for-word literal translation. The reader is trying to understand the original text, so faithfulness to meaning matters more than preserving syntax.
+- **For novels and literary works**: Polish the translation into natural, literary Chinese that captures the atmosphere and tone of the original. The goal is for the Chinese reader to feel the same mood and rhythm as a reader of the original — not a stiff, literal rendering, but prose that breathes and flows like it was originally written in Chinese. Pay attention to sentence rhythm, word choice, and stylistic consistency. Avoid translationese (翻译腔).
 - Keep proper nouns in their commonly known Chinese form (e.g., "London" → "伦敦", "Elizabeth" → "伊丽莎白"). If a name has no established Chinese translation, transliterate and include the original in parentheses on first occurrence.
 - For headings (h1-h6), translate them as well — the builder will insert a Chinese sub-heading after the original.
 - If a paragraph is very short (under 5 characters) and appears to be a decorative separator like "***" or "—", you may skip translating it.
@@ -112,6 +113,10 @@ python3 <skill-path>/scripts/build_bilingual_epub.py \
 ```
 
 The source EPUB path (fourth argument) is required. The builder operates in **patch mode**: it copies the entire original EPUB as-is, then only modifies the XHTML chapter files that have translations, inserting `<p class="bilingual-trans">` paragraphs after each original. It also appends bilingual CSS styles to the original stylesheet. Everything else — cover image, fonts, images, original CSS classes, layout, metadata — is preserved unchanged.
+
+### Vertical → Horizontal Writing Mode
+
+The builder automatically detects whether the source EPUB uses vertical writing mode (e.g., Japanese 縦書き with `writing-mode: vertical-rl`). When detected, it appends CSS overrides that force the entire book into horizontal writing mode (`writing-mode: horizontal-tb`) to match Chinese reading habits. This also neutralizes vertical-mode-only CSS properties like `text-orientation: sideways` and `text-combine-upright` (縦中横). The output will print `Vertical writing mode detected: overridden to horizontal-tb` when this conversion is applied.
 
 The result is a valid EPUB where:
 - The original formatting, cover, and images are intact

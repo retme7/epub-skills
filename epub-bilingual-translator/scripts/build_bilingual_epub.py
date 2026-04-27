@@ -18,6 +18,32 @@ def escape_xml(text):
     return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
 
 
+# CSS to override vertical writing mode to horizontal (for CJK vertical EPUBs)
+VERTICAL_TO_HORIZONTAL_CSS = '''
+
+/* ===== Vertical → Horizontal Writing Mode Override ===== */
+
+html, body {
+    writing-mode: horizontal-tb !important;
+    -webkit-writing-mode: horizontal-tb !important;
+    -epub-writing-mode: horizontal-tb !important;
+}
+
+/* Neutralize text-orientation (only meaningful in vertical mode) */
+* {
+    text-orientation: mixed !important;
+    -webkit-text-orientation: mixed !important;
+    -epub-text-orientation: mixed !important;
+}
+
+/* Neutralize tate-chu-yoko / text-combine-upright (only meaningful in vertical mode) */
+* {
+    text-combine-upright: none !important;
+    -webkit-text-combine-upright: none !important;
+    -webkit-text-combine: none !important;
+}
+'''
+
 # Bilingual CSS to append to the original stylesheet
 BILINGUAL_CSS_APPEND = '''
 
@@ -301,6 +327,21 @@ def insert_translations_into_xhtml(xhtml_content, translations, chapter_paragrap
     return result
 
 
+def is_vertical_writing_epub(src_zip):
+    """Detect if the EPUB uses vertical writing mode by checking CSS files."""
+    for item in src_zip.infolist():
+        name = item.filename
+        if not name.endswith('.css'):
+            continue
+        try:
+            css = src_zip.read(name).decode('utf-8')
+        except Exception:
+            continue
+        if re.search(r'writing-mode\s*:\s*vertical-', css):
+            return True
+    return False
+
+
 def find_css_files(opf_content, opf_dir=''):
     """Find CSS file paths referenced in the OPF manifest."""
     css_files = []
@@ -329,6 +370,9 @@ def build_bilingual_epub(parsed_data, translations_data, output_path, source_epu
             # mimetype must be first and uncompressed
             mt_data = src_zip.read('mimetype')
             dst_zip.writestr('mimetype', mt_data, compress_type=zipfile.ZIP_STORED)
+
+            # Detect vertical writing mode
+            is_vertical = is_vertical_writing_epub(src_zip)
 
             # Find the OPF path
             container_xml = src_zip.read('META-INF/container.xml').decode()
@@ -359,7 +403,7 @@ def build_bilingual_epub(parsed_data, translations_data, output_path, source_epu
                     continue
 
                 # Check if this is an XHTML chapter that needs translation
-                if name in chapter_map and name.endswith('.xhtml'):
+                if name in chapter_map and (name.endswith('.xhtml') or name.endswith('.html')):
                     ch = chapter_map[name]
                     ch_index = str(ch['index'])
                     ch_translations = translations_data.get(ch_index, {})
@@ -379,11 +423,13 @@ def build_bilingual_epub(parsed_data, translations_data, output_path, source_epu
                             translated_count += 1
                             data = modified.encode('utf-8')
 
-                # Check if this is a CSS file — append bilingual styles
+                # Check if this is a CSS file — append overrides and bilingual styles
                 if name in css_files and name not in patched_css:
                     try:
                         css_content = data.decode('utf-8')
                         if 'bilingual-trans' not in css_content:
+                            if is_vertical:
+                                css_content += VERTICAL_TO_HORIZONTAL_CSS
                             css_content += BILINGUAL_CSS_APPEND
                             data = css_content.encode('utf-8')
                             patched_css.add(name)
@@ -393,7 +439,7 @@ def build_bilingual_epub(parsed_data, translations_data, output_path, source_epu
                 # Write the file (possibly modified)
                 dst_zip.writestr(item, data)
 
-    return output_path, translated_count
+    return output_path, translated_count, is_vertical
 
 
 def main():
@@ -412,11 +458,13 @@ def main():
     with open(translations_path, 'r', encoding='utf-8') as f:
         translations_data = json.load(f)
 
-    result_path, translated_count = build_bilingual_epub(
+    result_path, translated_count, is_vertical = build_bilingual_epub(
         parsed_data, translations_data, output_path, source_epub
     )
     print(f"Bilingual EPUB created: {result_path}")
     print(f"  Chapters with translations inserted: {translated_count}")
+    if is_vertical:
+        print(f"  Vertical writing mode detected: overridden to horizontal-tb")
     print(f"  Original formatting preserved: yes")
 
 
