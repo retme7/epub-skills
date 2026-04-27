@@ -1,0 +1,31 @@
+{
+  "skill_name": "epub-bilingual-translator",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Translate the EPUB at test/The_Last_Lantern.epub into a bilingual Chinese/English EPUB. Save the output to test/The_Last_Lantern_bilingual.epub",
+      "expected_output": "A valid EPUB3 file containing both original English paragraphs and Chinese translations in alternating order, with distinct visual styling for each language.",
+      "files": [],
+      "expectations": [
+        "The output file test/The_Last_Lantern_bilingual.epub exists and is a valid EPUB (mimetype is application/epub+zip)",
+        "The output EPUB contains Chinese characters (translations present)",
+        "The output EPUB contains the original English text from the source",
+        "Each original paragraph is followed by its Chinese translation in the XHTML",
+        "The EPUB has a table of contents navigation",
+        "The CSS includes bilingual styling classes (bilingual-orig and bilingual-trans)"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "I have an epub file called my-book.epub in my Downloads folder. Can you translate it to Chinese and make a bilingual version? Put the result next to the original.",
+      "expected_output": "The skill should parse the EPUB, translate paragraphs, and produce a bilingual EPUB alongside the original file.",
+      "files": [],
+      "expectations": [
+        "The skill parses the EPUB using the parse_epub.py script",
+        "The skill translates paragraphs from English to Chinese",
+        "The skill builds the bilingual EPUB using build_bilingual_epub.py",
+        "The output filename indicates it is a bilingual version"
+      ]
+    }
+  ]
+}
