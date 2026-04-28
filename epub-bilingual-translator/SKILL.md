@@ -90,15 +90,40 @@ with open("translations.json", "w", encoding="utf-8") as f:
     json.dump(translations, f, ensure_ascii=False, indent=2)
 ```
 
+### Batch size limit per chapter
+
+If a single content chapter contains **more than 200 paragraphs**, split it into smaller batches (up to 200 paragraphs per batch) before translating. Translating too many paragraphs at once can exceed context limits or cause failures.
+
+**How to split:**
+- Divide the chapter's paragraphs sequentially into batches of ~200. For example, a 450-paragraph chapter becomes three batches: paragraphs 0–199, 200–399, and 400–449.
+- Translate each batch separately, preserving the original paragraph indices.
+- Merge all batches of the same chapter into one chapter entry in the translations JSON.
+
+**Example:** Chapter 5 has 450 paragraphs. After translating three batches, the merged translations JSON still uses a single chapter key `"5"`:
+
+```json
+{
+  "5": {
+    "0": "...",
+    "1": "...",
+    ...
+    "199": "...",
+    "200": "...",
+    ...
+    "449": "..."
+  }
+}
+```
+
 ### Handling large books
 
-For books with many paragraphs, work in batches per chapter to avoid hitting context limits:
+For books with many paragraphs, work chapter by chapter (and batch by batch for large chapters) to avoid hitting context limits:
 
 1. Read the parsed JSON.
-2. For each content chapter, translate all its paragraphs and write the translations.
-3. After translating all chapters, write the complete translations JSON.
+2. For each content chapter, check its paragraph count. If it exceeds 200, split it into batches of ~200 paragraphs and translate each batch separately.
+3. Accumulate translations and write the complete translations JSON after all chapters and batches are done.
 
-If the book is very large (hundreds of paragraphs), you can translate a few chapters at a time, accumulating results into the translations JSON file.
+If the book is very large (hundreds of paragraphs), you can translate a few chapters (or batches) at a time, accumulating results into the translations JSON file.
 
 ### Parallel translation with agent teams
 
@@ -113,41 +138,49 @@ For books with many content chapters (roughly 8+ chapters), use `TeamCreate` to 
 
 1. **Parse the EPUB** (as usual, single agent).
 2. **Identify content chapters** from the parsed JSON — skip chapters with `"is_nav": true` or zero paragraphs.
-3. **Create a team** with `TeamCreate`.
-4. **Split chapters among translator agents.** A reasonable split is 1-3 chapters per agent, depending on chapter size. Assign each agent a disjoint set of chapter indices.
-5. **Spawn translator agents** (one per batch), each running in the background. Each agent:
-   - Reads the parsed JSON to get the paragraphs for its assigned chapters.
-   - Translates all paragraphs for those chapters following the standard translation approach.
-   - Writes its translations to a **separate file** named `translations_ch{start}-{end}.json` using `json.dump()` (not the Write tool). The file uses the same translations JSON structure, but only contains the chapters that agent was assigned.
-6. **Wait for all agents to complete.** Check the task list for completion status.
-7. **Merge all partial translation files** into a single `translations.json` using Python:
+3. **Determine translation units.** A unit is either:
+   - A whole chapter with ≤ 200 paragraphs, or
+   - A single batch of a large chapter (e.g., paragraphs 0–199, 200–399, etc.).
+4. **Create a team** with `TeamCreate`.
+5. **Split units among translator agents.** A reasonable split is 1–3 units per agent, depending on size. Assign each agent a disjoint set of units. For a chapter with 450 paragraphs, you might assign the three batches to three separate agents, or give all three batches to one agent if its context can handle ~450 paragraphs.
+6. **Spawn translator agents** (one per batch), each running in the background. Each agent:
+   - Reads the parsed JSON to get the paragraphs for its assigned units.
+   - Translates only the paragraphs in its assigned units following the standard translation approach.
+   - Writes its translations to a **separate file** named `translations_ch{chapter_index}_batch{batch_index}.json` (or `translations_ch{start}-{end}.json` for whole chapters) using `json.dump()` (not the Write tool). The file uses the same translations JSON structure, but only contains the chapters (and paragraph indices) that agent was assigned.
+7. **Wait for all agents to complete.** Check the task list for completion status.
+8. **Merge all partial translation files** into a single `translations.json` using Python:
 
 ```python
 import json, glob
 
 merged = {}
-for path in sorted(glob.glob("translations_ch*-*.json")):
+for path in sorted(glob.glob("translations_ch*.json")):
     with open(path, encoding="utf-8") as f:
-        merged.update(json.load(f))
+        partial = json.load(f)
+        for ch_idx, paras in partial.items():
+            if ch_idx not in merged:
+                merged[ch_idx] = {}
+            merged[ch_idx].update(paras)
 
 with open("translations.json", "w", encoding="utf-8") as f:
     json.dump(merged, f, ensure_ascii=False, indent=2)
 ```
 
-8. **Build the bilingual EPUB** with the merged translations (as usual, single agent).
-9. **Clean up** the team with `TeamDelete` and remove partial translation files.
+9. **Build the bilingual EPUB** with the merged translations (as usual, single agent).
+10. **Clean up** the team with `TeamDelete` and remove partial translation files.
 
 **Prompt template for translator agents:**
 
 Each spawned translator agent should receive a prompt like:
 
 ```
-You are translating chapters {start}-{end} of an EPUB book into Chinese.
+You are translating part of an EPUB book into Chinese.
 
-Read the file {parsed_json_path}. From the "chapters" array, translate only chapters at indices {chapter_indices} (skip any with "is_nav": true or zero paragraphs).
+Read the file {parsed_json_path}. From the "chapters" array, translate only the assigned units:
+{unit_description}
 
 Follow these translation rules:
-- Translate paragraph by paragraph, preserving paragraph indices.
+- Translate paragraph by paragraph, preserving paragraph indices exactly as they appear in the source JSON.
 - Aim for natural, readable Chinese. For literary works, produce polished prose that captures the atmosphere and tone — avoid translationese (翻译腔).
 - Keep proper nouns in their commonly known Chinese form. If no established translation exists, transliterate and include the original in parentheses on first occurrence.
 - Translate headings (h1-h6) as well.
@@ -156,13 +189,13 @@ Follow these translation rules:
 Write the translations to {output_path} using json.dump() with ensure_ascii=False. The JSON structure must be:
 {{"chapter_index_str": {{"paragraph_index_str": "翻译文本"}}}}
 
-Use string keys for both chapter and paragraph indices.
+Use string keys for both chapter and paragraph indices. Only include chapters and paragraphs that you were assigned.
 ```
 
 **Important considerations:**
 - Each agent must write to its **own** output file to avoid conflicts. Never have multiple agents write to the same file.
 - The merge step is sequential — do not build the EPUB until all agents finish and the merge is complete.
-- Agent context limits still apply per-agent. If a single batch (e.g., 3 large chapters) exceeds what one agent can handle, reduce the batch size to 1-2 chapters per agent.
+- Agent context limits still apply per-agent. If a single unit (e.g., 200 paragraphs) is too large for one agent, reduce the batch size to ~100 paragraphs.
 - For consistency of tone and terminology across chapters, include the translation rules in every agent's prompt. If the book has a glossary or recurring proper nouns, include them in the prompt as well.
 
 ## Phase 3: Build the Bilingual EPUB
@@ -237,21 +270,25 @@ python3 scripts/build_bilingual_epub.py parsed.json translations.json output.epu
 
 ### Parallel translation for large books
 
-For books with 8+ content chapters, use an agent team to translate chapters in parallel:
+For books with 8+ content chapters, use an agent team to translate chapters in parallel. If a chapter exceeds 200 paragraphs, split it into batches and distribute the batches among agents:
 
 ```bash
 # Parse once
 python3 scripts/parse_epub.py input.epub parsed.json
 
-# (Create team, spawn translator agents — each writes translations_ch{start}-{end}.json)
+# (Create team, spawn translator agents — each writes translations_ch*.json)
 
 # Merge all partial files into one
 python3 -c "
 import json, glob
 merged = {}
-for p in sorted(glob.glob('translations_ch*-*.json')):
+for p in sorted(glob.glob('translations_ch*.json')):
     with open(p, encoding='utf-8') as f:
-        merged.update(json.load(f))
+        partial = json.load(f)
+        for ch_idx, paras in partial.items():
+            if ch_idx not in merged:
+                merged[ch_idx] = {}
+            merged[ch_idx].update(paras)
 with open('translations.json', 'w', encoding='utf-8') as f:
     json.dump(merged, f, ensure_ascii=False, indent=2)
 "
