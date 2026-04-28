@@ -100,6 +100,71 @@ For books with many paragraphs, work in batches per chapter to avoid hitting con
 
 If the book is very large (hundreds of paragraphs), you can translate a few chapters at a time, accumulating results into the translations JSON file.
 
+### Parallel translation with agent teams
+
+For books with many content chapters (roughly 8+ chapters), use `TeamCreate` to spawn multiple translator agents that work on different chapters in parallel. This can significantly reduce total translation time.
+
+**When to use team-based parallel translation:**
+- The book has 8+ content chapters (after excluding nav/cover chapters)
+- Each chapter has enough paragraphs to justify an agent (roughly 10+ paragraphs per chapter)
+- The parsed JSON is available and has been read to identify content chapter indices
+
+**Workflow:**
+
+1. **Parse the EPUB** (as usual, single agent).
+2. **Identify content chapters** from the parsed JSON — skip chapters with `"is_nav": true` or zero paragraphs.
+3. **Create a team** with `TeamCreate`.
+4. **Split chapters among translator agents.** A reasonable split is 1-3 chapters per agent, depending on chapter size. Assign each agent a disjoint set of chapter indices.
+5. **Spawn translator agents** (one per batch), each running in the background. Each agent:
+   - Reads the parsed JSON to get the paragraphs for its assigned chapters.
+   - Translates all paragraphs for those chapters following the standard translation approach.
+   - Writes its translations to a **separate file** named `translations_ch{start}-{end}.json` using `json.dump()` (not the Write tool). The file uses the same translations JSON structure, but only contains the chapters that agent was assigned.
+6. **Wait for all agents to complete.** Check the task list for completion status.
+7. **Merge all partial translation files** into a single `translations.json` using Python:
+
+```python
+import json, glob
+
+merged = {}
+for path in sorted(glob.glob("translations_ch*-*.json")):
+    with open(path, encoding="utf-8") as f:
+        merged.update(json.load(f))
+
+with open("translations.json", "w", encoding="utf-8") as f:
+    json.dump(merged, f, ensure_ascii=False, indent=2)
+```
+
+8. **Build the bilingual EPUB** with the merged translations (as usual, single agent).
+9. **Clean up** the team with `TeamDelete` and remove partial translation files.
+
+**Prompt template for translator agents:**
+
+Each spawned translator agent should receive a prompt like:
+
+```
+You are translating chapters {start}-{end} of an EPUB book into Chinese.
+
+Read the file {parsed_json_path}. From the "chapters" array, translate only chapters at indices {chapter_indices} (skip any with "is_nav": true or zero paragraphs).
+
+Follow these translation rules:
+- Translate paragraph by paragraph, preserving paragraph indices.
+- Aim for natural, readable Chinese. For literary works, produce polished prose that captures the atmosphere and tone — avoid translationese (翻译腔).
+- Keep proper nouns in their commonly known Chinese form. If no established translation exists, transliterate and include the original in parentheses on first occurrence.
+- Translate headings (h1-h6) as well.
+- Skip very short decorative separators (under 5 characters, like "***" or "—").
+
+Write the translations to {output_path} using json.dump() with ensure_ascii=False. The JSON structure must be:
+{{"chapter_index_str": {{"paragraph_index_str": "翻译文本"}}}}
+
+Use string keys for both chapter and paragraph indices.
+```
+
+**Important considerations:**
+- Each agent must write to its **own** output file to avoid conflicts. Never have multiple agents write to the same file.
+- The merge step is sequential — do not build the EPUB until all agents finish and the merge is complete.
+- Agent context limits still apply per-agent. If a single batch (e.g., 3 large chapters) exceeds what one agent can handle, reduce the batch size to 1-2 chapters per agent.
+- For consistency of tone and terminology across chapters, include the translation rules in every agent's prompt. If the book has a glossary or recurring proper nouns, include them in the prompt as well.
+
 ## Phase 3: Build the Bilingual EPUB
 
 Once the translations JSON is complete, run the builder script:
@@ -165,6 +230,31 @@ python3 scripts/parse_epub.py input.epub parsed.json
 # Translate chapter 0, write to translations.json
 # Translate chapter 1, append to translations.json
 # ...continue until done
+
+# Build
+python3 scripts/build_bilingual_epub.py parsed.json translations.json output.epub input.epub
+```
+
+### Parallel translation for large books
+
+For books with 8+ content chapters, use an agent team to translate chapters in parallel:
+
+```bash
+# Parse once
+python3 scripts/parse_epub.py input.epub parsed.json
+
+# (Create team, spawn translator agents — each writes translations_ch{start}-{end}.json)
+
+# Merge all partial files into one
+python3 -c "
+import json, glob
+merged = {}
+for p in sorted(glob.glob('translations_ch*-*.json')):
+    with open(p, encoding='utf-8') as f:
+        merged.update(json.load(f))
+with open('translations.json', 'w', encoding='utf-8') as f:
+    json.dump(merged, f, ensure_ascii=False, indent=2)
+"
 
 # Build
 python3 scripts/build_bilingual_epub.py parsed.json translations.json output.epub input.epub
