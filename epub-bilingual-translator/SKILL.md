@@ -167,13 +167,15 @@ with open("translations.json", "w", encoding="utf-8") as f:
 ```
 
 9. **Build the bilingual EPUB** with the merged translations (as usual, single agent).
-10. **Clean up** the team with `TeamDelete` and remove partial translation files.
+10. **Clean up** the team with `TeamDelete` and remove partial translation files. This cleanup is done by the main agent only — translator agents must not delete any files.
 
 **Prompt template for translator agents:**
 
 Each spawned translator agent should receive a prompt like:
 
 ```
+You are a translator agent. Your ONLY job is to translate text and write the output file. Do NOT delete, move, or clean up any files (including temporary or partial translation files). Leave all files in place for the main agent to handle.
+
 You are translating part of an EPUB book into Chinese.
 
 Read the file {parsed_json_path}. From the "chapters" array, translate only the assigned units:
